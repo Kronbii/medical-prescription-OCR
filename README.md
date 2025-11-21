@@ -1,11 +1,10 @@
 # Medical Prescription OCR Backend
 
-Express + TypeScript backend that accepts a prescription image, extracts text with Google Vision OCR, sends the text to an LLM for medication parsing, and returns structured JSON.
+Express + TypeScript backend that accepts a prescription image, sends it directly to an OpenAI Vision model (no external OCR), and returns transcribed text plus structured medications.
 
 ## Prerequisites
 - Node.js 18+
-- Google Cloud service account key for Vision API (`keys/google-vision.json`)
-- OpenAI API key (or compatible endpoint)
+- OpenAI API key (or compatible endpoint) with a vision-capable model (e.g., `gpt-4o`)
 
 ## Setup
 1) Install dependencies:
@@ -18,11 +17,9 @@ cp .env.example .env
 ```
 Set:
 - `OPENAI_API_KEY` – your key
-- `OPENAI_MODEL` – e.g., `gpt-4o-mini`
-- `GOOGLE_APPLICATION_CREDENTIALS` – default `./keys/google-vision.json`
+- `OPENAI_MODEL` – e.g., `gpt-4o` (vision-capable; defaults to `gpt-4o`)
 - `PORT` – optional, defaults to `4000`
 - `LOG_DIR` – optional, defaults to `./logs`; OCR and LLM outputs are saved under `logs/ocr` and `logs/llm`
-3) Place your Google Vision credentials JSON into `keys/google-vision.json`.
 
 ## Run
 - Development (with nodemon + ts-node):
