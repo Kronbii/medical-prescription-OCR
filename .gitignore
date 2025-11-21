@@ -1,6 +1,10 @@
 node_modules/
 dist
 keys/
+uploads/
+*.jpg
+*.png
+*.jpeg
 .env
 .env.example
 uploads/*
