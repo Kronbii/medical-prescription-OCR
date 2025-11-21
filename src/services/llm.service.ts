@@ -1,6 +1,11 @@
 import fs from 'fs/promises';
 import path from 'path';
-import { OpenAI } from 'openai';
+import {
+  GenerativeModel,
+  GoogleGenerativeAI,
+  Schema,
+  SchemaType,
+} from '@google/generative-ai';
 import { Medication } from '../types/PrescriptionTypes';
 
 const SYSTEM_PROMPT = [
@@ -12,22 +17,22 @@ const SYSTEM_PROMPT = [
   'Return JSON that matches the provided schema (ocr_text plus medications array). No explanations.',
 ].join(' ');
 
-const medicationSchema = {
-  type: 'object',
+const medicationSchema: Schema = {
+  type: SchemaType.OBJECT,
   properties: {
-    ocr_text: { type: 'string' },
+    ocr_text: { type: SchemaType.STRING },
     medications: {
-      type: 'array',
+      type: SchemaType.ARRAY,
       items: {
-        type: 'object',
+        type: SchemaType.OBJECT,
         properties: {
-          drug_name: { type: 'string' },
-          strength: { type: 'string' },
-          form: { type: 'string' },
-          frequency: { type: 'string' },
-          duration: { type: 'string' },
-          instructions: { type: 'string' },
-          confidence: { type: 'number' },
+          drug_name: { type: SchemaType.STRING },
+          strength: { type: SchemaType.STRING },
+          form: { type: SchemaType.STRING },
+          frequency: { type: SchemaType.STRING },
+          duration: { type: SchemaType.STRING },
+          instructions: { type: SchemaType.STRING },
+          confidence: { type: SchemaType.NUMBER },
         },
         required: [
           'drug_name',
@@ -38,26 +43,32 @@ const medicationSchema = {
           'instructions',
           'confidence',
         ],
-        additionalProperties: false,
       },
     },
   },
   required: ['ocr_text', 'medications'],
-  additionalProperties: false,
 };
 
 export class LlmService {
-  private client: OpenAI;
-  private model: string;
+  private client: GoogleGenerativeAI;
+  private modelName: string;
+  private apiVersion: string;
+  private model: GenerativeModel;
 
   constructor(apiKey?: string, model?: string) {
-    const key = apiKey || process.env.OPENAI_API_KEY;
+    const key = apiKey || process.env.GEMINI_API_KEY;
     if (!key) {
-      throw new Error('Missing OpenAI API key. Set OPENAI_API_KEY in .env.');
+      throw new Error('Missing Gemini API key. Set GEMINI_API_KEY in .env.');
     }
 
-    this.client = new OpenAI({ apiKey: key });
-    this.model = model || process.env.OPENAI_MODEL || 'gpt-4o';
+    this.client = new GoogleGenerativeAI(key);
+    // Default to a vision-capable model that is widely available.
+    this.modelName = model || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
+    this.apiVersion = process.env.GEMINI_API_VERSION || 'v1beta';
+    this.model = this.client.getGenerativeModel({
+      model: this.modelName,
+      systemInstruction: { role: 'system', parts: [{ text: SYSTEM_PROMPT }] },
+    }, { apiVersion: this.apiVersion });
   }
 
   async parsePrescriptionFromImage(
@@ -65,29 +76,24 @@ export class LlmService {
     displayName?: string
   ): Promise<{ ocrText: string; medications: Medication[] }> {
     try {
-      const imageUrl = await this.readImageAsDataUrl(filePath);
+      const imagePart = await this.readImageInlineData(filePath);
       const userText = this.buildUserInstruction(displayName);
 
-      const completion = await this.client.chat.completions.create({
-        model: this.model,
-        temperature: 0,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
+      const response = await this.model.generateContent({
+        contents: [
           {
             role: 'user',
-            content: [
-              { type: 'text', text: userText },
-              { type: 'image_url', image_url: { url: imageUrl } },
-            ],
+            parts: [{ text: userText }, imagePart],
           },
         ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: { name: 'image_medication_schema', schema: medicationSchema },
+        generationConfig: {
+          temperature: 0,
+          responseMimeType: 'application/json',
+          responseSchema: medicationSchema,
         },
       });
 
-      const content = completion.choices[0]?.message?.content;
+      const content = response.response.text();
       if (!content) {
         throw new Error('LLM returned empty content.');
       }
@@ -104,8 +110,7 @@ export class LlmService {
         medications: rawMedications.map(this.normalizeMedication),
       };
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Unknown LLM error.';
+      const message = error instanceof Error ? error.message : 'Unknown LLM error.';
       throw new Error(`LLM parsing failed: ${message}`);
     }
   }
@@ -120,10 +125,17 @@ export class LlmService {
     ].join(' ');
   }
 
-  private async readImageAsDataUrl(filePath: string): Promise<string> {
+  private async readImageInlineData(
+    filePath: string
+  ): Promise<{ inlineData: { data: string; mimeType: string } }> {
     const buffer = await fs.readFile(filePath);
     const mime = this.guessMimeType(filePath);
-    return `data:${mime};base64,${buffer.toString('base64')}`;
+    return {
+      inlineData: {
+        data: buffer.toString('base64'),
+        mimeType: mime,
+      },
+    };
   }
 
   private guessMimeType(filePath: string): string {
