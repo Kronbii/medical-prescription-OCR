@@ -1,11 +1,9 @@
 import { Request, Response } from 'express';
 import fs from 'fs/promises';
 import path from 'path';
-import { VisionService } from '../services/vision.service';
 import { LlmService } from '../services/llm.service';
 import { Medication } from '../types/PrescriptionTypes';
 
-const visionService = new VisionService();
 const llmService = new LlmService();
 const LOG_DIR = process.env.LOG_DIR || path.join(process.cwd(), 'logs');
 
@@ -20,8 +18,10 @@ export const handleUpload = async (
     }
 
     const filePath = req.file.path;
-    const ocrText = await visionService.extractText(filePath);
-    const medications: Medication[] = await llmService.parseMedications(ocrText);
+    const { ocrText, medications } = await llmService.parsePrescriptionFromImage(
+      filePath,
+      req.file.originalname
+    );
 
     try {
       await persistOutputs(ocrText, medications, req.file.originalname);
