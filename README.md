@@ -1,10 +1,10 @@
 # Medical Prescription OCR Backend
 
-Express + TypeScript backend that accepts a prescription image, sends it directly to a Gemini vision model (no external OCR), and returns transcribed text plus structured medications.
+Express + TypeScript backend that accepts a prescription image, sends it directly to an OpenAI Vision model (no external OCR), and returns transcribed text plus structured medications.
 
 ## Prerequisites
 - Node.js 18+
-- Google AI Studio (Gemini) API key with a vision-capable model (e.g., `gemini-1.5-flash`)
+- OpenAI API key (or compatible endpoint) with a vision-capable model (e.g., `gpt-4o`)
 
 ## Setup
 1) Install dependencies:
@@ -16,9 +16,8 @@ npm install
 cp .env.example .env
 ```
 Set:
-- `GEMINI_API_KEY` – your Google AI Studio API key
-- `GEMINI_MODEL` – e.g., `gemini-2.0-flash` (vision-capable; defaults to `gemini-2.0-flash`; set this to a model from your AI Studio list)
-- `GEMINI_API_VERSION` – optional; defaults to `v1beta` (needed for response_schema support)
+- `OPENAI_API_KEY` – your key
+- `OPENAI_MODEL` – e.g., `gpt-4o` (vision-capable; defaults to `gpt-4o`)
 - `PORT` – optional, defaults to `4000`
 - `LOG_DIR` – optional, defaults to `./logs`; OCR and LLM outputs are saved under `logs/ocr` and `logs/llm`
 
