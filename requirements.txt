@@ -1,8 +1,0 @@
-pytesseract
-opencv-python
-Pillow
-numpy
-google-cloud-vision
-rapidfuzz
-PyQt6
-pandas
