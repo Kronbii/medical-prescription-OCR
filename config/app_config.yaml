@@ -1,0 +1,73 @@
+api:
+  title: "Medical Prescription OCR API"
+  description: "AI-powered prescription image processing with multilingual support (Arabic, English, French)"
+  version: "1.0.0"
+  health_status: "ok"
+  endpoints:
+    process: "/api/v1/process"
+    process_batch: "/api/v1/process-batch"
+    health: "/health"
+    docs: "/docs"
+  cors:
+    allow_origins: ["*"]
+    allow_credentials: true
+    allow_methods: ["*"]
+    allow_headers: ["*"]
+
+gemini:
+  max_retries: 2
+  temperature: 0
+  response_mime_type: "application/json"
+  json_fallback_prompt: "IMPORTANT: Return ONLY valid JSON. Do not include any text outside the JSON. Ensure all strings are properly escaped. Match this structure exactly."
+  safety_settings:
+    # Safety filter thresholds: BLOCK_NONE, BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE, BLOCK_LOW_AND_ABOVE
+    # For medical content, we relax filters to avoid false positives with medical terminology
+    # BLOCK_ONLY_HIGH allows medical content while still blocking truly harmful content
+    harm_category_dangerous_content: "BLOCK_NONE"
+    harm_category_harassment: "BLOCK_NONE"
+    harm_category_hate_speech: "BLOCK_NONE"
+    harm_category_sexually_explicit: "BLOCK_NONE"
+
+files:
+  results_filename: "results.json"
+  summary_filename: "summary.json"
+  ocr_extension: ".txt"
+  debug_suffix: "_error.json"
+
+directories:
+  temp: "/tmp/prescription-ocr"
+  debug: "debug"
+  ocr: "ocr"
+  llm: "llm"
+
+limits:
+  string_truncation_safe_name: 100
+  string_truncation_ocr_name: 50
+  debug_response_size: 5000
+
+defaults:
+  unknown_fallback: "unknown"
+  route_default: "Oral"
+  refills_default: 0
+  substitution_allowed_default: true
+  json_indent: 2
+
+conversion:
+  bytes_to_mb: 1048576
+
+optimization:
+  # Enable optimized shorter prompts (reduces token count significantly)
+  use_optimized_prompts: true
+  
+  # Enable image optimization (resize and compress before sending to API)
+  optimize_images: false
+  
+  # Maximum image dimensions (larger images will be resized maintaining aspect ratio)
+  # Lower values = faster processing but may reduce OCR accuracy for very small text
+  max_image_width: 2048
+  max_image_height: 2048
+  
+  # JPEG quality (1-100, lower = smaller file but lower quality)
+  # 85 is a good balance between quality and size
+  image_quality: 85
+

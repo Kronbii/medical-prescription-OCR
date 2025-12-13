@@ -1,0 +1,2 @@
+"""Medical Prescription OCR Application"""
+
