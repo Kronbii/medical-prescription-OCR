@@ -41,6 +41,7 @@ class OutputService:
         Returns:
             Path to saved file
         """
+        Config._ensure_initialized()
         output_dir = output_dir or Config.OUTPUT_DIR
         
         # Get image name for subdirectory
@@ -60,12 +61,17 @@ class OutputService:
         results_filename = Config.get("files", "results_filename", default="results.json")
         output_path = image_dir / results_filename
         
-        # Prepare output data - match the requested format
+        # Prepare output data - simplified format with only medicine names
         if result.success and result.prescription:
-            # Output in the exact format requested
+            # Extract only medicine names (from generic_name field where we store them)
+            medicine_names = [
+                med.identity.generic_name 
+                for med in result.prescription.medicines 
+                if med.identity.generic_name
+            ]
+            # Output simplified format: just array of medicine names
             output_data = {
-                "prescription_meta": result.prescription.prescription_meta.model_dump(exclude_none=True),
-                "medicines": [med.model_dump(exclude_none=True) for med in result.prescription.medicines]
+                "medicines": medicine_names
             }
         else:
             output_data = {
@@ -99,6 +105,7 @@ class OutputService:
         Returns:
             Path to summary file
         """
+        Config._ensure_initialized()
         output_dir = output_dir or Config.OUTPUT_DIR
         
         # Get image name for subdirectory
@@ -150,6 +157,7 @@ class OutputService:
         Returns:
             Path to summary file
         """
+        Config._ensure_initialized()
         output_dir = output_dir or Config.OUTPUT_DIR
         output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -199,6 +207,7 @@ class OutputService:
         Returns:
             Path to saved file
         """
+        Config._ensure_initialized()
         ocr_subdir = Config.get("directories", "ocr", default="ocr")
         log_dir = log_dir or (Config.LOG_DIR / ocr_subdir)
         log_dir.mkdir(parents=True, exist_ok=True)

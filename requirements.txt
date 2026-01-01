@@ -20,3 +20,7 @@ aiofiles==24.1.0
 # Configuration
 pyyaml==6.0.2
 
+# Advanced fuzzy string matching
+rapidfuzz==3.10.1
+phonetics==1.0.5
+

@@ -19,6 +19,12 @@ gemini:
   temperature: 0
   response_mime_type: "application/json"
   json_fallback_prompt: "IMPORTANT: Return ONLY valid JSON. Do not include any text outside the JSON. Ensure all strings are properly escaped. Match this structure exactly."
+  # thinking_level: "low" for faster processing, "medium" or "high" for deeper reasoning
+  # Lower thinking levels use faster, simpler processing instead of full deep reasoning
+  # This significantly reduces inference time for simpler tasks like OCR extraction
+  thinking_level: "low"
+  # Default model name (can be overridden by GEMINI_MODEL env var)
+  default_model: "gemini-2.0-flash-exp"
   safety_settings:
     # Safety filter thresholds: BLOCK_NONE, BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE, BLOCK_LOW_AND_ABOVE
     # For medical content, we relax filters to avoid false positives with medical terminology
@@ -60,14 +66,53 @@ optimization:
   use_optimized_prompts: true
   
   # Enable image optimization (resize and compress before sending to API)
-  optimize_images: false
+  optimize_images: true
+  
+  # Enable medicine name validation (validates and corrects typos using AI)
+  # When enabled, extracted medicine names are validated and corrected if needed
+  validate_medicine_names: true
   
   # Maximum image dimensions (larger images will be resized maintaining aspect ratio)
   # Lower values = faster processing but may reduce OCR accuracy for very small text
   max_image_width: 2048
   max_image_height: 2048
   
-  # JPEG quality (1-100, lower = smaller file but lower quality)
+  # Image quality (1-100, lower = smaller file but lower quality)
   # 85 is a good balance between quality and size
   image_quality: 85
+  
+  # Image format (JPEG, PNG, WEBP)
+  # WEBP provides better compression than JPEG for similar quality
+  image_format: "JPEG"
+
+# Medicine database configuration
+medicine_db:
+  # Path to medicine database file (JSON, CSV, or text file)
+  # If not provided or file doesn't exist, falls back to AI validation
+  # JSON format: ["medicine1", "medicine2", ...] or {"medicines": ["medicine1", ...]}
+  # CSV format: First column should contain medicine names
+  # Text format: One medicine name per line
+  db_path: null  # e.g., "./data/medicines.json" or "./data/medicines.csv"
+  
+  # Minimum similarity threshold for matching (0.0 to 1.0)
+  # Higher values = stricter matching (fewer false positives)
+  # Lower values = more lenient matching (more matches, but may include false positives)
+  # Recommended: 0.75 (75% similarity required)
+  match_threshold: 0.75
+
+# Processing settings
+processing:
+  # Maximum image file size in MB
+  max_image_size_mb: 10
+  # Supported image file extensions
+  supported_formats: [".png", ".jpg", ".jpeg", ".webp"]
+  # Number of parallel workers for batch processing
+  max_workers: 5
+
+# Paths (can be overridden by environment variables)
+paths:
+  # Output directory for results (default: ./results)
+  output_dir: "./results"
+  # Log directory (default: ./logs)
+  log_dir: "./logs"
 

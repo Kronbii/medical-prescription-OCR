@@ -13,28 +13,38 @@ class ImageProcessor:
     @staticmethod
     def optimize_image(
         image_path: Path,
-        max_width: int = 2048,
-        max_height: int = 2048,
-        quality: int = 85,
-        format: str = "JPEG"
+        max_width: int = None,
+        max_height: int = None,
+        quality: int = None,
+        format: str = None
     ) -> Image.Image:
         """
         Optimize image by resizing and compressing for faster API processing
         
         Args:
             image_path: Path to image file
-            max_width: Maximum width in pixels (default 2048)
-            max_height: Maximum height in pixels (default 2048)
-            quality: JPEG quality 1-100 (default 85, lower = smaller file)
-            format: Output format (JPEG, PNG, WEBP)
+            max_width: Maximum width in pixels (defaults to config value)
+            max_height: Maximum height in pixels (defaults to config value)
+            quality: Image quality 1-100 (defaults to config value)
+            format: Output format (JPEG, PNG, WEBP) (defaults to config value)
             
         Returns:
             Optimized PIL Image object
         """
+        # Get defaults from config if not provided
+        if max_width is None:
+            max_width = Config.get("optimization", "max_image_width", default=2048)
+        if max_height is None:
+            max_height = Config.get("optimization", "max_image_height", default=2048)
+        if quality is None:
+            quality = Config.get("optimization", "image_quality", default=85)
+        if format is None:
+            format = Config.get("optimization", "image_format", default="JPEG")
+        
         img = Image.open(image_path)
         
-        # Convert RGBA to RGB if needed (for JPEG)
-        if format == "JPEG" and img.mode in ("RGBA", "LA", "P"):
+        # Convert RGBA to RGB if needed (for JPEG/WEBP)
+        if format in ("JPEG", "WEBP") and img.mode in ("RGBA", "LA", "P"):
             # Create white background
             background = Image.new("RGB", img.size, (255, 255, 255))
             if img.mode == "P":
@@ -58,20 +68,20 @@ class ImageProcessor:
     @staticmethod
     def get_optimized_image_bytes(
         image_path: Path,
-        max_width: int = 2048,
-        max_height: int = 2048,
-        quality: int = 85,
-        format: str = "JPEG"
+        max_width: int = None,
+        max_height: int = None,
+        quality: int = None,
+        format: str = None
     ) -> bytes:
         """
         Get optimized image as bytes for API transmission
         
         Args:
             image_path: Path to image file
-            max_width: Maximum width in pixels
-            max_height: Maximum height in pixels
-            quality: JPEG quality 1-100
-            format: Output format (JPEG, PNG, WEBP)
+            max_width: Maximum width in pixels (defaults to config value)
+            max_height: Maximum height in pixels (defaults to config value)
+            quality: Image quality 1-100 (defaults to config value)
+            format: Output format (JPEG, PNG, WEBP) (defaults to config value)
             
         Returns:
             Image bytes
@@ -82,7 +92,7 @@ class ImageProcessor:
         
         buffer = io.BytesIO()
         save_kwargs = {"format": format}
-        if format == "JPEG":
+        if format in ("JPEG", "WEBP"):
             save_kwargs["quality"] = quality
             save_kwargs["optimize"] = True
         elif format == "PNG":
@@ -103,6 +113,7 @@ class ImageProcessor:
             return False, f"File not found: {image_path}"
         
         # Check extension
+        Config._ensure_initialized()
         if image_path.suffix.lower() not in Config.SUPPORTED_FORMATS:
             return False, f"Unsupported format. Supported: {', '.join(Config.SUPPORTED_FORMATS)}"
         
@@ -136,6 +147,7 @@ class ImageProcessor:
         if not directory.exists():
             return []
         
+        Config._ensure_initialized()
         images = []
         pattern = "**/*" if recursive else "*"
         
@@ -148,5 +160,6 @@ class ImageProcessor:
     @staticmethod
     def is_image_file(file_path: Path) -> bool:
         """Check if file is an image based on extension"""
+        Config._ensure_initialized()
         return file_path.suffix.lower() in Config.SUPPORTED_FORMATS
 

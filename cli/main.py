@@ -1,5 +1,6 @@
 """CLI tool for processing prescription images"""
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 import click
@@ -27,7 +28,7 @@ from app.types.prescription import ProcessingResult
     "-p",
     type=int,
     default=None,
-    help=f"Number of parallel workers (default: {Config.MAX_WORKERS})"
+    help="Number of parallel workers (default: from config)"
 )
 @click.option(
     "--recursive",
@@ -42,7 +43,14 @@ from app.types.prescription import ProcessingResult
     default=True,
     help="Generate summary file"
 )
-def main(input_path: str, output: Optional[str], parallel: Optional[int], recursive: bool, summary: bool):
+@click.option(
+    "--delay",
+    "-d",
+    type=float,
+    default=None,
+    help="Delay in seconds between API calls (processes sequentially when set)"
+)
+def main(input_path: str, output: Optional[str], parallel: Optional[int], recursive: bool, summary: bool, delay: Optional[float]):
     """
     Process prescription images from a file or directory.
     
@@ -56,6 +64,7 @@ def main(input_path: str, output: Optional[str], parallel: Optional[int], recurs
         sys.exit(1)
     
     # Setup paths
+    Config._ensure_initialized()  # Ensure config is loaded
     input_path_obj = Path(input_path)
     output_dir = Path(output) if output else Config.OUTPUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -70,29 +79,30 @@ def main(input_path: str, output: Optional[str], parallel: Optional[int], recurs
         click.echo(f"No valid images found in: {input_path}", err=True)
         sys.exit(1)
     
+    click.echo("Processing prescription images...")
     click.echo(f"Found {len(images)} image(s) to process")
     
     # Initialize agent
     agent = PrescriptionAgent()
     
-    # Process images
-    max_workers = parallel or Config.MAX_WORKERS
     results = []
+    image_results = []  # Store results with image paths for ordered output
     
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Submit all tasks
-        future_to_image = {
-            executor.submit(agent.process_image, img): img
-            for img in images
-        }
+    # If delay is specified, process sequentially with delay
+    if delay is not None and delay > 0:
+        click.echo(f"Processing sequentially with {delay}s delay between API calls...")
+        click.echo()  # Empty line before progress bar
         
-        # Process with progress bar
-        with tqdm(total=len(images), desc="Processing") as pbar:
-            for future in as_completed(future_to_image):
-                image_path = future_to_image[future]
+        with tqdm(total=len(images), desc="Processing", bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]') as pbar:
+            for idx, image_path in enumerate(images):
+                # Add delay before processing (except for first image)
+                if idx > 0:
+                    time.sleep(delay)
+                
                 try:
-                    result = future.result()
+                    result = agent.process_image(image_path)
                     results.append(result)
+                    image_results.append((image_path, result))
                     
                     # Save individual result and summary
                     image_name = image_path.name
@@ -102,24 +112,81 @@ def main(input_path: str, output: Optional[str], parallel: Optional[int], recurs
                     if result.success:
                         if result.prescription:
                             OutputService.save_ocr_text(result.prescription)
-                        pbar.set_postfix_str(f"✓ {image_path.name}")
-                    else:
-                        pbar.set_postfix_str(f"✗ {image_path.name}: {result.error}")
-                    
+                
                 except Exception as e:
                     error_result = ProcessingResult(
                         success=False,
                         error=str(e)
                     )
                     results.append(error_result)
-                    pbar.set_postfix_str(f"✗ {image_path.name}: {e}")
+                    image_results.append((image_path, error_result))
                 
                 pbar.update(1)
+    else:
+        # Process in parallel (original behavior)
+        Config._ensure_initialized()  # Ensure config is loaded
+        max_workers = parallel or Config.MAX_WORKERS
+        click.echo(f"Processing with {max_workers} parallel workers...")
+        click.echo()  # Empty line before progress bar
+        
+        # Create a list to store results in order
+        result_dict = {}
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_image = {
+                executor.submit(agent.process_image, img): img
+                for img in images
+            }
+            
+            # Process with progress bar
+            with tqdm(total=len(images), desc="Processing", bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]') as pbar:
+                for future in as_completed(future_to_image):
+                    image_path = future_to_image[future]
+                    try:
+                        result = future.result()
+                        results.append(result)
+                        result_dict[image_path] = result
+                        
+                        # Save individual result and summary
+                        image_name = image_path.name
+                        OutputService.save_result(result, output_dir, image_name)
+                        OutputService.save_image_summary(result, output_dir, image_name)
+                        
+                        if result.success:
+                            if result.prescription:
+                                OutputService.save_ocr_text(result.prescription)
+                        
+                    except Exception as e:
+                        error_result = ProcessingResult(
+                            success=False,
+                            error=str(e)
+                        )
+                        results.append(error_result)
+                        result_dict[image_path] = error_result
+                    
+                    pbar.update(1)
+        
+        # Build ordered results list
+        image_results = [(img, result_dict[img]) for img in images]
     
     # Save summary
     if summary:
         summary_path = OutputService.save_batch_summary(results, output_dir)
-        click.echo(f"\nSummary saved to: {summary_path}")
+    
+    # Print results for each image
+    click.echo()  # Empty line after progress bar
+    for idx, (image_path, result) in enumerate(image_results, 1):
+        image_name = str(image_path) if isinstance(image_path, Path) else image_path
+        time_str = f"{result.processing_time:.2f}s" if result.processing_time else "N/A"
+        
+        if result.success:
+            med_count = len(result.prescription.medicines) if result.prescription else 0
+            click.echo(f"[{idx}/{len(images)}] {image_name} ... ✓ Done ({time_str})")
+        else:
+            # Truncate long error messages
+            error_msg = result.error[:60] + "..." if result.error and len(result.error) > 60 else (result.error or "Unknown error")
+            click.echo(f"[{idx}/{len(images)}] {image_name} ... ✗ Failed: {error_msg} ({time_str})")
     
     # Print statistics
     successful = sum(1 for r in results if r.success)
@@ -130,7 +197,8 @@ def main(input_path: str, output: Optional[str], parallel: Optional[int], recurs
         if r.success and r.prescription
     )
     
-    click.echo(f"\n{'='*50}")
+    click.echo()
+    click.echo(f"{'='*50}")
     click.echo(f"Processing complete!")
     click.echo(f"Total images: {len(results)}")
     click.echo(f"Successful: {successful}")

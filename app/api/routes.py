@@ -13,6 +13,11 @@ from app.core.config import Config
 router = APIRouter()
 agent = PrescriptionAgent()
 
+# Load endpoint paths from config
+_health_endpoint = Config.get("api", "endpoints", "health", default="/health")
+_process_endpoint = Config.get("api", "endpoints", "process", default="/api/v1/process")
+_process_batch_endpoint = Config.get("api", "endpoints", "process_batch", default="/api/v1/process-batch")
+
 
 @router.get(_health_endpoint, response_model=HealthResponse)
 async def health_check():
@@ -35,11 +40,12 @@ async def process_image(file: UploadFile = File(...)):
         Processed prescription data
     """
     # Validate file type
+    Config._ensure_initialized()
     if not ImageProcessor.is_image_file(Path(file.filename or "")):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid file type. Supported: {', '.join(Config.SUPPORTED_FORMATS)}"
-        )
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type. Supported: {', '.join(Config.SUPPORTED_FORMATS)}"
+            )
     
     # Save uploaded file temporarily
     temp_dir = Path(Config.get("directories", "temp", default="/tmp/prescription-ocr"))

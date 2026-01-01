@@ -21,25 +21,51 @@ class Config:
     # Load app config
     _app_config: Optional[Dict[str, Any]] = None
     
-    # Gemini API
+    # Gemini API (env vars take priority, then config file)
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
-    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "")
     GEMINI_SYSTEM_PROMPT: Optional[str] = os.getenv("GEMINI_SYSTEM_PROMPT", None)
     
-    # Processing settings
-    MAX_IMAGE_SIZE_MB: int = int(os.getenv("MAX_IMAGE_SIZE_MB", "10"))
-    SUPPORTED_FORMATS: list = [".png", ".jpg", ".jpeg", ".webp"]
+    # These will be initialized from config file on first access
+    _initialized: bool = False
     
-    # Output settings
-    OUTPUT_DIR: Path = Path(os.getenv("OUTPUT_DIR", "./results"))
-    LOG_DIR: Path = Path(os.getenv("LOG_DIR", "./logs"))
+    @classmethod
+    def _ensure_initialized(cls):
+        """Ensure config is initialized before accessing attributes"""
+        if not cls._initialized:
+            cls.load_app_config()
     
-    # Parallel processing
-    MAX_WORKERS: int = int(os.getenv("MAX_WORKERS", "5"))
-    
-    # API settings
-    API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
-    API_PORT: int = int(os.getenv("API_PORT", "8000"))
+    @classmethod
+    def _initialize_from_config(cls):
+        """Initialize class attributes from config file (called once)"""
+        if cls._initialized:
+            return
+        
+        # Get config dict directly (avoid recursion)
+        config = cls._app_config if cls._app_config is not None else {}
+        
+        # Set model from env or config
+        if not cls.GEMINI_MODEL:
+            gemini_config = config.get("gemini", {})
+            cls.GEMINI_MODEL = gemini_config.get("default_model", "gemini-2.0-flash-exp")
+        
+        # Processing settings from config (env vars take priority)
+        processing_config = config.get("processing", {})
+        cls.MAX_IMAGE_SIZE_MB = int(os.getenv("MAX_IMAGE_SIZE_MB", str(processing_config.get("max_image_size_mb", 10))))
+        cls.SUPPORTED_FORMATS = processing_config.get("supported_formats", [".png", ".jpg", ".jpeg", ".webp"])
+        cls.MAX_WORKERS = int(os.getenv("MAX_WORKERS", str(processing_config.get("max_workers", 5))))
+        
+        # Paths from config (env vars take priority)
+        paths_config = config.get("paths", {})
+        cls.OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", paths_config.get("output_dir", "./results")))
+        cls.LOG_DIR = Path(os.getenv("LOG_DIR", paths_config.get("log_dir", "./logs")))
+        
+        # API settings (env vars take priority)
+        api_config = config.get("api", {})
+        cls.API_HOST = os.getenv("API_HOST", api_config.get("host", "0.0.0.0"))
+        cls.API_PORT = int(os.getenv("API_PORT", str(api_config.get("port", 8000))))
+        
+        cls._initialized = True
     
     @classmethod
     def load_app_config(cls) -> Dict[str, Any]:
@@ -51,10 +77,13 @@ class Config:
             if cls.APP_CONFIG_PATH.exists():
                 with open(cls.APP_CONFIG_PATH, "r", encoding="utf-8") as f:
                     cls._app_config = yaml.safe_load(f) or {}
-                    return cls._app_config
             else:
                 # Return empty dict if config file doesn't exist
-                return {}
+                cls._app_config = {}
+            
+            # Initialize class attributes from config (after loading)
+            cls._initialize_from_config()
+            return cls._app_config
         except (yaml.YAMLError, IOError) as e:
             raise ValueError(f"Failed to load app config from {cls.APP_CONFIG_PATH}: {e}")
     
@@ -83,6 +112,7 @@ class Config:
     @classmethod
     def validate(cls) -> None:
         """Validate required configuration"""
+        cls._ensure_initialized()
         if not cls.GEMINI_API_KEY:
             raise ValueError(
                 "GEMINI_API_KEY is required. Set it in .env file or environment variable."
@@ -91,6 +121,7 @@ class Config:
     @classmethod
     def ensure_directories(cls) -> None:
         """Ensure output and log directories exist"""
+        cls._ensure_initialized()
         cls.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         cls.LOG_DIR.mkdir(parents=True, exist_ok=True)
         (cls.LOG_DIR / cls.get("directories", "ocr", default="ocr")).mkdir(parents=True, exist_ok=True)

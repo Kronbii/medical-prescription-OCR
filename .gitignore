@@ -1,14 +1,12 @@
-# Node.js
-node_modules/
-dist
-npm-debug.log*
-yarn-error.log*
-
-# Python
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
+
+# C extensions
 *.so
+
+# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -22,47 +20,236 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-venv/
-env/
-ENV/
-.venv
+MANIFEST
 
-# Environment
-*.env
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# pdm
+.pdm.toml
+
+# PEP 582
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
 .env
-!.env.example
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.conda/
 
-# Keys and secrets
-keys/
-keys/*.json
-!keys/google-vision.json
+# Spyder project settings
+.spyderproject
+.spyproject
 
-# Uploads and results
-uploads/
-uploads/*
-!uploads/.gitkeep
-results/
-logs/
+# Rope project settings
+.ropeproject
 
-# Test images (optional - uncomment if you want to ignore)
-# *.jpg
-# *.png
-# *.jpeg
+# mkdocs documentation
+/site
 
-# OS
-.DS_Store
-Thumbs.db
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
 
-# IDE
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# IDEs and editors
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings/
+*.code-workspace
 
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 
-test/
+# Project-specific: Environment and secrets
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+keys/
+secrets/
+*.pem
+*.key
+*.cert
+
+# Project-specific: Results and outputs
 results/
+gen-results/
+*.txt
+!requirements.txt
+!README.txt
+my_report.txt
+model_comparison_report.txt
+*_report.txt
+
+# Project-specific: Logs and debug files
+logs/
+*.log
+debug/
+ocr/
+llm/
+
+# Project-specific: Temporary files
+/tmp/
+/tmp/prescription-ocr/
+*.tmp
+*.temp
+*.cache
+
+# Project-specific: Database files (user-provided)
+data/*.json
+data/*.csv
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+!data/medicines_example.json
+
+# Project-specific: Uploaded files
+uploads/
+temp/
+*.upload
+
+# Project-specific: Test images (uncomment if you want to ignore test images)
+# test/
+# *.jpg
+# *.jpeg
+# *.png
+# *.webp
+
+# Project-specific: API keys and credentials
+credentials.json
+service-account*.json
+*-credentials.json
+
+# Project-specific: Generated documentation
+docs/build/
+docs/_build/
+
+# Project-specific: Backup files
+*.bak
+*.backup
+*~
+*.orig
+
+# Project-specific: Comparison and analysis files
+compare_results_output/
+analysis/
+reports/
+
+# Project-specific: Large model files (if any)
+*.bin
+*.pt
+*.pth
+*.h5
+*.ckpt
+models/
+checkpoints/
+
+# Project-specific: Jupyter notebooks outputs
+*.ipynb_checkpoints/
+
+# Project-specific: Local configuration overrides
+config/local_*.yaml
+config/local_*.json
+config/*_local.yaml
+config/*_local.json

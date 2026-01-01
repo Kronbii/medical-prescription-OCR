@@ -1,13 +1,17 @@
 """Gemini 3 Pro Preview service for prescription parsing"""
 import json
+import re
+import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, Union
+from typing import Dict, Any, Union, List
 import google.generativeai as genai
 from PIL import Image
 
 from app.core.config import Config
 from app.types.prescription import ParsedPrescription
 from app.services.image_processor import ImageProcessor
+from app.services.medicine_validator import MedicineValidator
 
 
 class GeminiService:
@@ -23,12 +27,13 @@ class GeminiService:
             use_optimized_prompts = Config.get("optimization", "use_optimized_prompts", default=False)
         self.use_optimized_prompts = use_optimized_prompts
         
-        # Load prompts from config file
+        # Load prompts from config file (load once)
+        prompts_config = Config.load_prompts_config()
+        
         # Priority: 1. Provided parameter, 2. Environment variable, 3. Config file
         if system_prompt:
             self.system_prompt = system_prompt
         else:
-            prompts_config = Config.load_prompts_config()
             if self.use_optimized_prompts and prompts_config.get("system_prompt_optimized"):
                 self.system_prompt = prompts_config["system_prompt_optimized"]
             else:
@@ -41,7 +46,6 @@ class GeminiService:
                 )
         
         # Load user prompt template from config
-        prompts_config = Config.load_prompts_config()
         if self.use_optimized_prompts and prompts_config.get("user_prompt_template_optimized"):
             self.user_prompt_template = prompts_config["user_prompt_template_optimized"]
         else:
@@ -57,6 +61,23 @@ class GeminiService:
         self.max_image_width = Config.get("optimization", "max_image_width", default=2048)
         self.max_image_height = Config.get("optimization", "max_image_height", default=2048)
         self.image_quality = Config.get("optimization", "image_quality", default=85)
+        self.image_format = Config.get("optimization", "image_format", default="JPEG")
+        
+        # Medicine validation settings
+        self.validate_medicine_names = Config.get("optimization", "validate_medicine_names", default=True)
+        
+        # Initialize medicine validator with database if configured
+        db_path_str = Config.get("medicine_db", "db_path", default=None)
+        match_threshold = Config.get("medicine_db", "match_threshold", default=0.75)
+        
+        db_path = None
+        if db_path_str:
+            db_path = Path(db_path_str)
+            if not db_path.is_absolute():
+                # Make relative to base directory
+                db_path = Config.BASE_DIR / db_path
+        
+        self.medicine_validator = MedicineValidator(db_path=db_path, match_threshold=match_threshold)
         
         if not api_key:
             raise ValueError("Gemini API key is required")
@@ -87,12 +108,13 @@ class GeminiService:
         # Load and optimize image
         try:
             if self.optimize_images:
-                # Use optimized image
+                # Use optimized image (format from config)
                 img = ImageProcessor.optimize_image(
                     image_path,
                     max_width=self.max_image_width,
                     max_height=self.max_image_height,
-                    quality=self.image_quality
+                    quality=self.image_quality,
+                    format=self.image_format
                 )
             else:
                 # Use original image
@@ -108,35 +130,40 @@ class GeminiService:
         # Prepare content for Gemini (image + text)
         full_prompt = f"{self.system_prompt}\n\n{user_prompt}"
         
-        # Call Gemini API with structured output (with retry)
+        # Call Gemini API with prompt-based JSON (no structured output for speed)
         max_retries = Config.get("gemini", "max_retries", default=2)
         response = None
         
+        # Add JSON instruction to prompt for faster processing (no schema overhead)
+        json_fallback = Config.get("gemini", "json_fallback_prompt", default="Return ONLY valid JSON.")
+        json_prompt = f"{full_prompt}\n\n{json_fallback}"
+        
         for attempt in range(max_retries + 1):
             try:
-                # Try structured output first (for models that support it)
+                # Use simple generation config without structured output for speed
+                # Set lower thinking_level for faster processing (less deep reasoning)
+                thinking_level = Config.get("gemini", "thinking_level", default="low")
+                temperature = Config.get("gemini", "temperature", default=0)
+                
+                # Build generation config with thinking_level for faster inference
+                # thinking_level can be "low", "medium", or "high" - "low" is fastest
+                # This significantly reduces inference time for simpler tasks like OCR
                 try:
+                    # Try to set thinking_level directly (for Gemini 3 Pro and newer models)
                     generation_config = genai.types.GenerationConfig(
-                        temperature=Config.get("gemini", "temperature", default=0),
-                        response_mime_type=Config.get("gemini", "response_mime_type", default="application/json"),
-                        response_schema=self._get_response_schema()
+                        temperature=temperature,
+                        thinking_level=thinking_level
                     )
-                    
-                    response = self.model.generate_content(
-                        [full_prompt, img],
-                        generation_config=generation_config
+                except (TypeError, AttributeError):
+                    # Fallback if thinking_level not supported in this SDK version
+                    generation_config = genai.types.GenerationConfig(
+                        temperature=temperature
                     )
-                except (AttributeError, TypeError):
-                    # Fallback for models that don't support structured output
-                    # Request JSON in the prompt instead
-                    json_fallback = Config.get("gemini", "json_fallback_prompt", default="IMPORTANT: Return ONLY valid JSON.")
-                    json_prompt = f"{full_prompt}\n\n{json_fallback}"
-                    response = self.model.generate_content(
-                        [json_prompt, img],
-                        generation_config=genai.types.GenerationConfig(
-                            temperature=Config.get("gemini", "temperature", default=0)
-                        )
-                    )
+                
+                response = self.model.generate_content(
+                    [json_prompt, img],
+                    generation_config=generation_config
+                )
                 
                 # Break if we got a response
                 break
@@ -151,32 +178,37 @@ class GeminiService:
             raise RuntimeError("Failed to get response from Gemini API")
         
         # Parse response - handle both structured and text responses
-        response_text = response.text.strip()
+        # IMPORTANT: Capture raw response immediately, before any processing
+        response_text = None
+        try:
+            response_text = response.text.strip()
+        except Exception as text_error:
+            raise ValueError(f"Failed to extract response text: {text_error}")
         
         # Remove markdown code blocks if present
-        if response_text.startswith("```json"):
-            response_text = response_text[7:]
-        if response_text.startswith("```"):
-            response_text = response_text[3:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
-        response_text = response_text.strip()
+        response_text = self._clean_markdown_response(response_text)
         
         # Try to parse JSON with better error handling
         try:
             result = self._parse_json_response(response_text, display_name or image_path.name)
             
+            # Validate medicine names if enabled (post-processing validation)
+            if self.validate_medicine_names:
+                result = self._validate_medicine_names(result)
+            
             # Normalize and validate
-            return self._normalize_response(result, display_name or image_path.name)
-        except json.JSONDecodeError as e:
-            # Save the raw response for debugging
+            try:
+                return self._normalize_response(result, display_name or image_path.name)
+            except Exception as normalize_error:
+                self._save_debug_response(response_text, display_name or image_path.name, f"Normalization error: {str(normalize_error)}")
+                raise ValueError(f"Failed to normalize response: {normalize_error}")
+        except (json.JSONDecodeError, KeyError, ValueError, Exception) as e:
+            # Save the raw response for debugging (silently)
             self._save_debug_response(response_text, display_name or image_path.name, str(e))
             raise ValueError(f"Invalid JSON response from Gemini: {e}")
     
     def _parse_json_response(self, response_text: str, source_file: str) -> Dict[str, Any]:
         """Parse JSON response with error recovery"""
-        import re
-        
         # First, try direct parsing
         try:
             return json.loads(response_text)
@@ -205,8 +237,6 @@ class GeminiService:
     
     def _fix_json_issues(self, text: str) -> str:
         """Try to fix common JSON issues"""
-        import re
-        
         # Fix unescaped quotes in strings (basic attempt)
         # This is a simple heuristic - may not catch all cases
         fixed = text
@@ -254,9 +284,7 @@ class GeminiService:
     
     def _save_debug_response(self, response_text: str, source_file: str, error: str):
         """Save raw response for debugging"""
-        from pathlib import Path
-        from datetime import datetime
-        
+        Config._ensure_initialized()
         debug_subdir = Config.get("directories", "debug", default="debug")
         debug_dir = Path(Config.LOG_DIR) / debug_subdir
         debug_dir.mkdir(parents=True, exist_ok=True)
@@ -266,6 +294,9 @@ class GeminiService:
         safe_name = "".join(c for c in source_file if c.isalnum() or c in "._-")[:truncate_limit]
         debug_suffix = Config.get("files", "debug_suffix", default="_error.json")
         debug_file = debug_dir / f"{timestamp}_{safe_name}{debug_suffix}"
+        
+        # Also save full response to a separate text file for easier viewing
+        debug_txt_file = debug_dir / f"{timestamp}_{safe_name}_raw.txt"
         
         debug_data = {
             "error": error,
@@ -278,80 +309,167 @@ class GeminiService:
             json_indent = Config.get("defaults", "json_indent", default=2)
             with open(debug_file, "w", encoding="utf-8") as f:
                 json.dump(debug_data, f, indent=json_indent, ensure_ascii=False)
+            
+            # Also save full raw response to text file
+            with open(debug_txt_file, "w", encoding="utf-8") as f:
+                f.write("="*80 + "\n")
+                f.write(f"RAW GEMINI RESPONSE\n")
+                f.write(f"Source: {source_file}\n")
+                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                f.write(f"Error: {error}\n")
+                f.write("="*80 + "\n\n")
+                f.write(response_text)
+            
+            # Debug files saved silently
         except Exception:
             pass  # Don't fail if we can't save debug info
+    
+    def _clean_markdown_response(self, text: str) -> str:
+        """Remove markdown code blocks from response text"""
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        elif text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        return text.strip()
     
     def _build_user_prompt(self, filename: str) -> str:
         """Build user instruction prompt from template"""
         return self.user_prompt_template.format(filename=filename)
     
-    def _get_response_schema(self) -> Dict[str, Any]:
-        """Get JSON schema for structured output"""
-        return {
-            "type": "object",
-            "properties": {
-                "prescription_meta": {
-                    "type": "object",
-                    "properties": {
-                        "date": {"type": "string"},
-                        "doctor_name": {"type": "string"},
-                        "patient_name": {"type": "string"},
-                        "patient_weight": {"type": "string"}
-                    }
-                },
-                "medicines": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "identity": {
-                                "type": "object",
-                                "properties": {
-                                    "brand_name": {"type": "string"},
-                                    "generic_name": {"type": "string"},
-                                    "form": {"type": "string"},
-                                    "strength": {"type": "string"}
-                                },
-                                "required": ["generic_name", "form", "strength"]
-                            },
-                            "instructions": {
-                                "type": "object",
-                                "properties": {
-                                    "route": {"type": "string"},
-                                    "dose_quantity": {"type": "string"},
-                                    "frequency": {"type": "string"},
-                                    "duration": {"type": "string"},
-                                    "special_instructions": {"type": "string"}
-                                },
-                                "required": ["route", "dose_quantity", "frequency", "duration"]
-                            },
-                            "dispensing": {
-                                "type": "object",
-                                "properties": {
-                                    "total_quantity": {"type": "string"},
-                                    "refills": {"type": "number"},
-                                    "substitution_allowed": {"type": "boolean"}
-                                }
-                            }
-                        },
-                        "required": ["identity", "instructions", "dispensing"]
-                    }
-                },
-                "ocr_text": {"type": "string"},
-                "languages_detected": {
-                    "type": "array",
-                    "items": {"type": "string"}
-                }
-            },
-            "required": ["prescription_meta", "medicines"]
-        }
+    def _validate_medicine_names(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate and correct medicine names using database or AI
+        
+        Priority:
+        1. If database is available, use fuzzy matching against database
+        2. If no database or no match found, fall back to AI validation
+        
+        For each medicine name:
+        1. Check if it's in stock (database) or valid (AI)
+        2. If valid/in stock, keep the matched/corrected name
+        3. If not in stock (below threshold), mark as "not in stock"
+        4. If invalid and no match, use AI to find closest valid name
+        
+        Args:
+            result: Parsed result with medicines array
+            
+        Returns:
+            Result with validated medicine names (only in-stock/valid medicines)
+        """
+        medicines = result.get("medicines", [])
+        if not medicines:
+            return result
+        
+        validated_medicines = []
+        not_in_stock = []  # Track medicines not in stock
+        
+        # First, try database validation if available
+        if self.medicine_validator.db_loaded:
+            for med in medicines:
+                validation_result = self.medicine_validator.validate_medicine(med)
+                
+                if validation_result['status'] == 'in_stock':
+                    # Use the matched name from database (in stock)
+                    validated_medicines.append(validation_result['matched_name'])
+                elif validation_result['status'] == 'not_in_stock':
+                    # Below threshold - not in stock, don't include
+                    not_in_stock.append({
+                        'detected': med,
+                        'best_match_score': validation_result['similarity_score']
+                    })
+                # If status is 'unknown', shouldn't happen if DB is loaded, but handle it
+                elif validation_result['status'] == 'unknown':
+                    # DB loaded but validation failed - fall back to AI
+                    ai_validated = self._validate_with_ai([med])
+                    if ai_validated:
+                        validated_medicines.extend(ai_validated)
+        else:
+            # No database available - use AI validation for all
+            ai_validated = self._validate_with_ai(medicines)
+            validated_medicines.extend(ai_validated)
+        
+        # Update result with validated medicines (only in-stock/valid medicines)
+        result["medicines"] = validated_medicines
+        
+        # Store not_in_stock information for reference
+        if not_in_stock:
+            result["not_in_stock"] = not_in_stock
+        
+        return result
+    
+    def _validate_with_ai(self, medicines: List[str]) -> List[str]:
+        """
+        Validate medicine names using AI (fallback when no database)
+        
+        Args:
+            medicines: List of medicine names to validate
+            
+        Returns:
+            List of validated medicine names
+        """
+        if not medicines:
+            return []
+        
+        # Build validation prompt
+        medicines_list = "\n".join([f"- {med}" for med in medicines])
+        validation_prompt = f"""Validate and correct these medicine names extracted from a prescription.
+
+For each medicine name:
+1. Check if it's a valid, real medicine name (generic or brand name)
+2. If valid, keep the exact name
+3. If invalid/typo, find the closest valid medicine name match based on:
+   - Name similarity (closest spelling match)
+   - Context (consider other medicines in the list)
+   - Common medicine names
+
+Medicine names to validate:
+{medicines_list}
+
+Return JSON with a 'medicines' key containing an array of VALIDATED medicine name strings.
+Only return validated, correct medicine names. If a name is clearly invalid and no close match exists, omit it.
+Return valid JSON only."""
+        
+        try:
+            # Call Gemini for validation
+            max_retries = Config.get("gemini", "max_retries", default=2)
+            temperature = Config.get("gemini", "temperature", default=0)
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    generation_config = genai.types.GenerationConfig(temperature=temperature)
+                    validation_response = self.model.generate_content(
+                        validation_prompt,
+                        generation_config=generation_config
+                    )
+                    
+                    validation_text = self._clean_markdown_response(validation_response.text)
+                    
+                    # Parse validated result
+                    validated_result = json.loads(validation_text)
+                    validated_medicines = validated_result.get("medicines", [])
+                    
+                    return validated_medicines
+                    
+                except Exception as e:
+                    if attempt < max_retries:
+                        continue
+                    # If validation fails, return original medicines
+                    print(f"Warning: AI medicine validation failed, using original names: {e}", file=sys.stderr)
+                    return medicines
+        except Exception as e:
+            # If validation fails completely, return original medicines
+            print(f"Warning: AI medicine validation error, using original names: {e}", file=sys.stderr)
+            return medicines
     
     def _normalize_response(
         self, 
         result: Dict[str, Any], 
         source_file: str
     ) -> ParsedPrescription:
-        """Normalize and validate Gemini response"""
+        """Normalize and validate Gemini response - simplified to extract only medicine names"""
         from app.types.prescription import (
             ParsedPrescription, 
             PrescriptionMeta, 
@@ -361,80 +479,90 @@ class GeminiService:
             MedicineDispensing
         )
         
-        # Extract prescription meta
-        meta_data = result.get("prescription_meta", {})
-        
-        # Handle case where prescription_meta might be a string (malformed response)
-        if isinstance(meta_data, str):
-            raise ValueError(
-                f"Invalid response format: prescription_meta is a string '{meta_data}' "
-                f"instead of an object. This may indicate the model returned malformed JSON. "
-                f"Try disabling optimized prompts or check the prompt configuration."
-            )
-        
-        if not isinstance(meta_data, dict):
-            meta_data = {}
-        
-        prescription_meta = PrescriptionMeta(
-            date=meta_data.get("date"),
-            doctor_name=meta_data.get("doctor_name"),
-            patient_name=meta_data.get("patient_name"),
-            patient_weight=meta_data.get("patient_weight")
-        )
-        
-        # Extract medicines
+        # Extract medicines - now just an array of strings
         raw_medicines = result.get("medicines", [])
         medicines = []
         
+        # Handle both string array and old format for backward compatibility
         for med in raw_medicines:
             try:
-                # Extract identity
-                identity_data = med.get("identity", {})
-                identity = MedicineIdentity(
-                    brand_name=identity_data.get("brand_name"),
-                    generic_name=identity_data.get("generic_name", ""),
-                    form=identity_data.get("form", ""),
-                    strength=identity_data.get("strength", "")
-                )
-                
-                # Extract instructions
-                instructions_data = med.get("instructions", {})
-                instructions = MedicineInstructions(
-                    route=instructions_data.get("route", Config.get("defaults", "route_default", default="Oral")),
-                    dose_quantity=instructions_data.get("dose_quantity", ""),
-                    frequency=instructions_data.get("frequency", ""),
-                    duration=instructions_data.get("duration", ""),
-                    special_instructions=instructions_data.get("special_instructions")
-                )
-                
-                # Extract dispensing
-                dispensing_data = med.get("dispensing", {})
-                dispensing = MedicineDispensing(
-                    total_quantity=dispensing_data.get("total_quantity"),
-                    refills=int(dispensing_data.get("refills", Config.get("defaults", "refills_default", default=0))),
-                    substitution_allowed=bool(dispensing_data.get("substitution_allowed", Config.get("defaults", "substitution_allowed_default", default=True)))
-                )
-                
-                medicines.append(Medicine(
-                    identity=identity,
-                    instructions=instructions,
-                    dispensing=dispensing
-                ))
+                if isinstance(med, str):
+                    # New simplified format: just a string (medicine name)
+                    medicine_name = med.strip()
+                    if medicine_name:
+                        # Create minimal Medicine object with just the name
+                        identity = MedicineIdentity(
+                            brand_name=None,
+                            generic_name=medicine_name,  # Store name in generic_name field
+                            form="",  # Empty for name-only extraction
+                            strength=""  # Empty for name-only extraction
+                        )
+                        # Create minimal instructions and dispensing
+                        instructions = MedicineInstructions(
+                            route="",
+                            dose_quantity="",
+                            frequency="",
+                            duration="",
+                            special_instructions=None
+                        )
+                        dispensing = MedicineDispensing(
+                            total_quantity=None,
+                            refills=0,
+                            substitution_allowed=True
+                        )
+                        medicines.append(Medicine(
+                            identity=identity,
+                            instructions=instructions,
+                            dispensing=dispensing
+                        ))
+                elif isinstance(med, dict):
+                    # Old format support (for backward compatibility)
+                    identity_data = med.get("identity", {})
+                    if isinstance(identity_data, dict):
+                        identity = MedicineIdentity(
+                            brand_name=identity_data.get("brand_name"),
+                            generic_name=identity_data.get("generic_name", ""),
+                            form=identity_data.get("form", ""),
+                            strength=identity_data.get("strength", "")
+                        )
+                        instructions_data = med.get("instructions", {})
+                        instructions = MedicineInstructions(
+                            route=instructions_data.get("route", Config.get("defaults", "route_default", default="Oral")),
+                            dose_quantity=instructions_data.get("dose_quantity", ""),
+                            frequency=instructions_data.get("frequency", ""),
+                            duration=instructions_data.get("duration", ""),
+                            special_instructions=instructions_data.get("special_instructions")
+                        )
+                        dispensing_data = med.get("dispensing", {})
+                        dispensing = MedicineDispensing(
+                            total_quantity=dispensing_data.get("total_quantity"),
+                            refills=int(dispensing_data.get("refills", Config.get("defaults", "refills_default", default=0))),
+                            substitution_allowed=bool(dispensing_data.get("substitution_allowed", Config.get("defaults", "substitution_allowed_default", default=True)))
+                        )
+                        medicines.append(Medicine(
+                            identity=identity,
+                            instructions=instructions,
+                            dispensing=dispensing
+                        ))
             except Exception as e:
                 # Skip invalid medicines but log
                 print(f"Warning: Skipping invalid medicine: {e}")
                 continue
         
-        # Extract other fields
-        ocr_text = result.get("ocr_text")
-        languages = result.get("languages_detected", [])
+        # Create minimal prescription meta (empty for name-only extraction)
+        prescription_meta = PrescriptionMeta(
+            date=None,
+            doctor_name=None,
+            patient_name=None,
+            patient_weight=None
+        )
         
         return ParsedPrescription(
             prescription_meta=prescription_meta,
             medicines=medicines,
-            ocr_text=ocr_text,
+            ocr_text=None,  # Not extracting OCR text for speed
             source_file=source_file,
-            languages_detected=languages
+            languages_detected=[]  # Not detecting languages for speed
         )
     
 
