@@ -253,3 +253,7 @@ config/local_*.yaml
 config/local_*.json
 config/*_local.yaml
 config/*_local.json
+
+# every env file stays out of git, whatever its suffix (.env.old, .env.local, ...); the example is the exception
+.env*
+!.env.example
